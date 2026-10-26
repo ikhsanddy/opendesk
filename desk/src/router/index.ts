@@ -1,0 +1,198 @@
+import { useScreenSize } from "@/composables/screen";
+import { canViewPersona, personaInterrupt } from "@/persona";
+import { useAuthStore } from "@/stores/auth";
+import { useUserStore } from "@/stores/user";
+import { CUSTOMER_PORTAL_ROOT } from "@/utils";
+import { ROUTES } from "@opendesk/shared/portalRoutes";
+import { createRouter, createWebHistory } from "vue-router";
+const { isMobileView } = useScreenSize();
+
+export const LOGIN_PAGE = "/login";
+
+// type the meta fields
+declare module "vue-router" {
+  interface RouteMeta {
+    auth?: boolean;
+    agent?: boolean;
+    admin?: boolean;
+    public?: boolean;
+    onSuccessRoute?: string;
+    parent?: string;
+  }
+}
+
+// Pages that render inside the desk chrome.
+const portalRoutes = [
+  // Agent Portal Routes
+  {
+    path: "",
+    redirect: "/home",
+  },
+  {
+    path: "/home",
+    name: "Home",
+    component: () => import("@/pages/home/Home.vue"),
+  },
+
+  {
+    path: "/tickets",
+    name: "TicketsAgent",
+    component: () => import("@/pages/ticket/Tickets.vue"),
+  },
+  {
+    path: "/tickets/:ticketId",
+    name: "TicketAgent",
+    component: () =>
+      import(`@/pages/ticket/${handleMobileView("TicketAgent")}.vue`),
+    props: true,
+  },
+  {
+    path: "/tickets/new/:templateId?",
+    name: "TicketAgentNew",
+    component: () => import("@/pages/ticket/TicketNew.vue"),
+    props: true,
+    meta: {
+      onSuccessRoute: "TicketAgent",
+      parent: "TicketsAgent",
+    },
+  },
+  {
+    path: "/notifications",
+    name: "Notifications",
+    component: () => import("@/pages/MobileNotifications.vue"),
+  },
+  {
+    path: "/kb",
+    name: "AgentKnowledgeBase",
+    component: () => import("@/pages/knowledge-base/KnowledgeBaseAgent.vue"),
+  },
+  {
+    path: "/search",
+    name: "SearchAgent",
+    component: () => import("@/pages/SearchAgent.vue"),
+    meta: { auth: true },
+  },
+  {
+    path: "/kb/articles/:articleId",
+    name: "Article",
+    component: () => import("@/pages/knowledge-base/Article.vue"),
+    props: true,
+  },
+  {
+    path: "/articles/new/:id",
+    name: "NewArticle",
+    component: () => import("@/pages/knowledge-base/NewArticle.vue"),
+    props: true,
+  },
+  {
+    path: "/customers",
+    name: "CustomerList",
+    component: () => import("@/pages/customer/Customers.vue"),
+  },
+  {
+    path: "/customers/:id",
+    name: "Customer",
+    component: () => import("@/pages/customer/Customer.vue"),
+    props: true,
+  },
+  {
+    path: "/contacts",
+    name: "ContactList",
+    component: () => import("@/pages/contact/Contacts.vue"),
+  },
+  {
+    path: "/contacts/:id",
+    name: "Contact",
+    component: () => import("@/pages/contact/Contact.vue"),
+    props: true,
+  },
+  {
+    path: "/agents",
+    name: "AgentList",
+    redirect: "/tickets",
+  },
+  {
+    path: "/teams",
+    name: "Teams",
+    redirect: "/tickets",
+  },
+  {
+    path: "/teams/:teamId",
+    name: "Team",
+    redirect: "/tickets",
+  },
+  {
+    path: "/dashboard",
+    name: "Dashboard",
+    component: () => import("@/pages/dashboard/Dashboard.vue"),
+  },
+  {
+    path: "/call-logs",
+    name: "CallLogs",
+    component: () => import("@/pages/call-logs/CallLogs.vue"),
+  },
+
+  // Additonal routes
+  {
+    path: "/:pathMatch(.*)*",
+    name: "Invalid Page",
+    component: () => import("@/pages/InvalidPage.vue"),
+  },
+];
+
+const routes = [
+  // Renders bare — no portal chrome.
+  {
+    path: "/onboarding",
+    name: "Persona",
+    component: () => import("@/pages/PersonaForm.vue"),
+    beforeEnter: () => canViewPersona(useAuthStore()) || { name: "Home" },
+  },
+  {
+    path: "/",
+    component: () => import("@/roots/AgentRoot.vue"),
+    children: portalRoutes,
+  },
+];
+
+const handleMobileView = (componentName: string) => {
+  return isMobileView.value ? `Mobile${componentName}` : componentName;
+};
+
+export const router = createRouter({
+  history: createWebHistory("/opendesk/"),
+  routes,
+});
+
+router.beforeEach(async (to, _, next) => {
+  const authStore = useAuthStore();
+  if (authStore.isLoggedIn) {
+    await authStore.init();
+  }
+
+  const interrupt = personaInterrupt(to, authStore);
+  if (interrupt) return next(interrupt);
+
+  if (!authStore.isLoggedIn) {
+    const redirectURL = to.fullPath !== "/" ? to.fullPath : "";
+
+    window.location.href =
+      LOGIN_PAGE +
+      (redirectURL ? `?redirect-to=/opendesk${redirectURL}` : "/opendesk");
+  } else if (to.name === "TicketAgent" && !authStore.isAgent) {
+    window.location.replace(
+      CUSTOMER_PORTAL_ROOT + ROUTES.ticket(to.params.ticketId as string)
+    );
+  } else if (!authStore.hasDeskAccess) {
+    window.location.replace(window.customer_home_page);
+  } else {
+    next();
+  }
+});
+
+router.afterEach(async (to) => {
+  const { users } = useUserStore();
+  if (!users?.fetched) {
+    await users.fetch();
+  }
+});

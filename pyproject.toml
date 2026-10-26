@@ -1,0 +1,30 @@
+[project]
+name = "opendesk"
+authors = [
+    { name = "Opendesk contributors", email = "ikhsanddy@users.noreply.github.com"}
+]
+description = "Open Source Customer Service Software"
+requires-python = ">=3.14"
+readme = "README.md"
+dynamic = ["version"]
+dependencies = [
+    # Core dependencies
+    "textblob==0.18.0.post0",
+]
+[build-system]
+requires = ["flit_core >=3.4,<4"]
+build-backend = "flit_core.buildapi"
+
+[tool.bench.frappe-dependencies]
+frappe = ">=17.0.0-dev,<18.0.0"
+telephony = ">=0.0.1,<1.0.0"
+
+[tool.bench.assets]
+build_dir = "./desk"
+out_dir = "./opendesk/public/desk"
+index_html_path = "./opendesk/www/opendesk/index.html"
+
+[project.urls]
+Homepage = "https://github.com/ikhsanddy/opendesk"
+Repository = "https://github.com/ikhsanddy/opendesk.git"
+"Bug Reports" = "https://github.com/ikhsanddy/opendesk/issues"

@@ -1,0 +1,538 @@
+import { router } from "@/router";
+import { useAuthStore } from "@/stores/auth";
+import { call, dayjsLocal, useFileUpload } from "frappe-ui";
+import { h, ref } from "vue";
+import zod from "zod";
+import LucideBrushCleaning from "~icons/lucide/brush-cleaning";
+import { Icon } from "frappe-ui/experimental";
+import { getMeta } from "./stores/meta";
+import { __ } from "./translation";
+import { copyToClipboard, isEmoji } from "@opendesk/shared/utils";
+
+// TODO: drop after #3846/#3847 merge; import from shared directly.
+export {
+  ConfirmDelete,
+  CUSTOMER_PORTAL_ROOT,
+  getErrorMessage,
+  handleInviteUserSuccess,
+  isContentEmpty,
+  parseApiOptions,
+  prettyDate,
+  timeAgo,
+} from "@opendesk/shared/utils";
+
+export function extractEmail(input: string) {
+  const match = input.match(/<([^>]+)>$/); // grabs the part inside <>
+  return match ? match[1] : input;
+}
+
+export function validateEmailWithZod(email: string) {
+  const extractedEmail = extractEmail(email);
+  const success = zod.string().email().safeParse(extractedEmail).success;
+  return success;
+}
+
+/** Dayjs date format derived from the site's System Settings (boot data). */
+export function getDateFormat(): string {
+  return ((window as any).date_format || "dd-mm-yyyy").toUpperCase();
+}
+
+/** Time format from the site's System Settings (boot data). */
+export function getTimeFormat(): string {
+  return (window as any).time_format || "HH:mm:ss";
+}
+
+export function dateFormat(date, format?: string) {
+  const _format = format || `${getDateFormat()} ${getTimeFormat()}`;
+  if (!date) return "";
+  const tzDate = dayjsLocal(date);
+  return tzDate.format(_format);
+}
+
+export function formatTime(
+  seconds: number,
+  config: {
+    day?: boolean;
+    hour?: boolean;
+    minute?: boolean;
+    second?: boolean;
+    maxUnits?: number;
+  } = {
+    day: true,
+    hour: true,
+    minute: true,
+    second: true,
+  }
+) {
+  const days = Math.floor(seconds / (3600 * 24));
+  const hours = Math.floor((seconds % (3600 * 24)) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainingSeconds = Math.floor(seconds % 60);
+
+  const parts: string[] = [];
+
+  if (config.day && days > 0) {
+    parts.push(`${days}d`);
+  }
+
+  if (config.hour && (hours > 0 || days > 0)) {
+    parts.push(`${hours}h`);
+  }
+
+  if (config.minute && (minutes > 0 || hours > 0 || days > 0)) {
+    parts.push(`${minutes}m`);
+  }
+
+  if (config.second) {
+    parts.push(
+      `${
+        remainingSeconds >= 10
+          ? remainingSeconds
+          : remainingSeconds > 1
+          ? "0" + remainingSeconds
+          : "0"
+      }s`
+    );
+  }
+
+  const limited = config.maxUnits ? parts.slice(0, config.maxUnits) : parts;
+  return limited.join(" ").trim();
+}
+
+/**
+ * Shareable link to one row of the ticket feed. `?highlight` is what
+ * TicketTimeline scrolls to; the hash only selects the Activity tab.
+ */
+export function copyActivityLink(
+  prefix: "comment" | "communication",
+  name: string
+) {
+  const { href } = router.resolve({
+    name: "TicketAgent",
+    params: { ticketId: router.currentRoute.value.params.ticketId },
+    hash: "#activity",
+    query: { highlight: `${prefix}-${name}` },
+  });
+  copyToClipboard(window.location.origin + href, __("Link copied."));
+}
+
+export const ClearFormattingUtility = {
+  label: "Clear formatting",
+  icon: LucideBrushCleaning,
+  action: (editor) => {
+    editor.chain().focus().unsetAllMarks().clearNodes().cleanStyles().run();
+  },
+  isActive: () => false,
+};
+
+export const textEditorMenuButtons = [
+  "Paragraph",
+  ["Heading 2", "Heading 3", "Heading 4", "Heading 5", "Heading 6"],
+  "Separator",
+  "Bold",
+  "Italic",
+  "FontColor",
+  "Separator",
+  ["Align Left", "Align Center", "Align Right"],
+  "Bullet List",
+  "Numbered List",
+  "Separator",
+  "Image",
+  "Video",
+  "Link",
+  "Blockquote",
+  "Code",
+  "Horizontal Rule",
+  [
+    "InsertTable",
+    "AddColumnBefore",
+    "AddColumnAfter",
+    "DeleteColumn",
+    "AddRowBefore",
+    "AddRowAfter",
+    "DeleteRow",
+    "MergeCells",
+    "SplitCell",
+    "ToggleHeaderColumn",
+    "ToggleHeaderRow",
+    "ToggleHeaderCell",
+    "DeleteTable",
+  ],
+  "Separator",
+  ClearFormattingUtility,
+];
+
+export function normalize(value: any) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  return value;
+}
+
+export function isTouchScreenDevice() {
+  return "ontouchstart" in document.documentElement;
+}
+
+/**
+ * Resolves a stored icon value into a renderable component.
+ * Supports Lucide icon names from the frappe-ui IconPicker, emojis stored by
+ * older views, and pre-resolved icon components, falling back to the ticket icon.
+ */
+export function getIcon(icon) {
+  if (!icon) {
+    return h(Icon, { name: "ticket" });
+  }
+  if (isEmoji(icon)) {
+    return h(
+      "div",
+      { class: "flex items-center justify-center leading-none" },
+      icon
+    );
+  }
+  if (typeof icon === "string" && icon.startsWith("lucide-")) {
+    return h("span", { class: icon });
+  }
+  if (typeof icon === "string") {
+    return h(Icon, { name: icon });
+  }
+  return icon;
+}
+function hasArabicContent(content: string) {
+  const arabicRegex = /[\u0600-\u06FF]/;
+  return arabicRegex.test(content);
+}
+
+export function getFontFamily(content: string) {
+  const langMap = {
+    default: "!font-[Inter]",
+    arabic: "!font-[system-ui]",
+  };
+  let lang = "";
+  if (hasArabicContent(content)) {
+    lang = "arabic";
+  }
+  return langMap[lang] || "";
+}
+
+/**
+ * Parses HTML string and returns the text content with preserved line breaks
+ * @param html - HTML string to parse
+ * @returns Plain text content with preserved line breaks
+ */
+export function htmlToText(html: string): string {
+  if (!html) return "";
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+
+  const lineBreaks = doc.querySelectorAll("br, p, div, li");
+  lineBreaks.forEach((el) => {
+    el.after("\n");
+  });
+
+  let text = doc.body.textContent || "";
+
+  text = text.replace(/\s+/g, " ");
+
+  text = text.replace(/\n\s*\n/g, "\n");
+
+  return text.trim();
+}
+
+/**
+ * Format a date according to the user's system settings
+ * @param {Date|string} date - Date object or ISO date string
+ * @returns {string} Formatted date string in the user's locale and preferences
+ */
+export function getFormattedDate(date) {
+  if (!date) return "";
+  const dateObj = dayjsLocal(date);
+  if (!dateObj.isValid()) return "";
+
+  return dateObj.format(getDateFormat());
+}
+
+export function getGridTemplateColumnsForTable(columns) {
+  let columnsWidth = columns
+    .map((col) => {
+      let width = col.width || 1;
+      if (typeof width === "number") {
+        return width + "fr";
+      }
+      return width;
+    })
+    .join(" ");
+  return columnsWidth + " 22px";
+}
+
+/**
+ * `options` carries the editor's `{ signal, onProgress }`, which is what drives
+ * the upload's progress ring and its cancel button.
+ */
+export function uploadFunction(
+  file: File,
+  doctype: string | null = null,
+  docname: string | null = null,
+  isPrivate: boolean = true,
+  options: { signal?: AbortSignal; onProgress?: (p: unknown) => void } = {}
+) {
+  let fileUpload = useFileUpload();
+  return fileUpload.upload(file, {
+    private: isPrivate,
+    doctype: doctype,
+    docname: docname,
+    ...options,
+  });
+}
+
+export const convertToConditions = ({
+  conditions,
+  fieldPrefix,
+}: {
+  conditions: any[];
+  fieldPrefix?: string;
+}): string => {
+  if (!conditions || conditions.length === 0) {
+    return "";
+  }
+
+  const processCondition = (condition: any): string => {
+    if (typeof condition === "string") {
+      return condition.toLowerCase();
+    }
+
+    if (Array.isArray(condition)) {
+      // Nested condition group
+      if (Array.isArray(condition[0])) {
+        const nestedStr = convertToConditions({
+          conditions: condition,
+          fieldPrefix,
+        });
+        return `(${nestedStr})`;
+      }
+
+      // Simple condition: [fieldname, operator, value]
+      const [field, operator, value] = condition;
+      const fieldAccess = fieldPrefix ? `${fieldPrefix}.${field}` : field;
+
+      const operatorMap: Record<string, string> = {
+        equals: "==",
+        "=": "==",
+        "==": "==",
+        "!=": "!=",
+        "not equals": "!=",
+        "<": "<",
+        "<=": "<=",
+        ">": ">",
+        ">=": ">=",
+        in: "in",
+        "not in": "not in",
+        like: "like",
+        "not like": "not like",
+        is: "is",
+        "is not": "is not",
+        between: "between",
+      };
+
+      let op = operatorMap[operator.toLowerCase()] || operator;
+
+      if (
+        (op === "==" || op === "!=") &&
+        (String(value).toLowerCase() === "yes" ||
+          String(value).toLowerCase() === "no")
+      ) {
+        let checkVal = String(value).toLowerCase() === "yes";
+        if (op === "!=") {
+          checkVal = !checkVal;
+        }
+        return checkVal ? fieldAccess : `not ${fieldAccess}`;
+      }
+
+      if (op === "is" && String(value).toLowerCase() === "set") {
+        return fieldAccess;
+      }
+      if (
+        (op === "is" && String(value).toLowerCase() === "not set") ||
+        (op === "is not" && String(value).toLowerCase() === "set")
+      ) {
+        return `not ${fieldAccess}`;
+      }
+
+      if (op === "like") {
+        return `(${fieldAccess} and "${value}" in ${fieldAccess})`;
+      }
+      if (op === "not like") {
+        return `(${fieldAccess} and "${value}" not in ${fieldAccess})`;
+      }
+
+      if (
+        op === "between" &&
+        typeof value === "string" &&
+        value.includes(",")
+      ) {
+        const [start, end] = value.split(",").map((v: string) => v.trim());
+        return `(${fieldAccess} >= "${start}" and ${fieldAccess} <= "${end}")`;
+      }
+
+      let valueStr = "";
+      if (op === "in" || op === "not in") {
+        let items: string[];
+        if (Array.isArray(value)) {
+          items = value.map((v) => `"${String(v).trim()}"`);
+        } else if (typeof value === "string") {
+          items = value.split(",").map((v) => `"${v.trim()}"`);
+        } else {
+          items = [`"${String(value).trim()}"`];
+        }
+        valueStr = `[${items.join(", ")}]`;
+        return `(${fieldAccess} and ${fieldAccess} ${op} ${valueStr})`;
+      }
+
+      if (typeof value === "string") {
+        valueStr = `"${value.replace(/"/g, '\\"')}"`;
+      } else if (typeof value === "number" || typeof value === "boolean") {
+        valueStr = String(value);
+      } else if (value === null || value === undefined) {
+        return op === "==" || op === "is" ? `not ${fieldAccess}` : fieldAccess;
+      } else {
+        valueStr = `"${String(value).replace(/"/g, '\\"')}"`;
+      }
+
+      return `${fieldAccess} ${op} ${valueStr}`;
+    }
+
+    return "";
+  };
+
+  const parts = conditions.map(processCondition);
+  return parts.join(" ");
+};
+
+export function validateConditions(conditions: any[]): boolean {
+  if (!Array.isArray(conditions)) return false;
+
+  // Handle simple condition [field, operator, value]
+  if (
+    conditions.length === 3 &&
+    typeof conditions[0] === "string" &&
+    typeof conditions[1] === "string"
+  ) {
+    return conditions[0] !== "" && conditions[1] !== "" && conditions[2] !== "";
+  }
+
+  // Iterate through conditions and logical operators
+  for (let i = 0; i < conditions.length; i++) {
+    const item = conditions[i];
+
+    // Skip logical operators (they will be validated by their position)
+    if (item === "and" || item === "or") {
+      // Ensure logical operators are not at start/end and not consecutive
+      if (
+        i === 0 ||
+        i === conditions.length - 1 ||
+        conditions[i - 1] === "and" ||
+        conditions[i - 1] === "or"
+      ) {
+        return false;
+      }
+      continue;
+    }
+
+    // Handle nested conditions (arrays)
+    if (Array.isArray(item)) {
+      if (!validateConditions(item)) {
+        return false;
+      }
+    } else if (item !== undefined && item !== null) {
+      return false;
+    }
+  }
+
+  return conditions.length > 0;
+}
+
+export async function removeAttachmentFromServer(attachment: string) {
+  await call("frappe.client.delete", {
+    doctype: "File",
+    name: attachment,
+  });
+}
+
+function getParentChildField(name: string) {
+  let [_, parent, child] = name.split("-");
+  return [parent, child];
+}
+
+export function getFieldDependencyLabel(name: string) {
+  const { getField } = getMeta("OD Ticket");
+  let [parent, child] = getParentChildField(name);
+  parent = getField(parent)?.label || parent;
+  child = getField(child)?.label || child;
+  return `${parent} → ${child}`;
+}
+
+export function getRandom(len = 4) {
+  let text = "";
+  const possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+  Array.from({ length: len }).forEach(() => {
+    text += possible.charAt(Math.floor(Math.random() * possible.length));
+  });
+
+  return text;
+}
+
+export function openContact(name: string) {
+  const url = window.location.origin + "/opendesk/contacts/" + name;
+  window.open(url, "_blank");
+}
+
+// Shared reactive mirror of <html data-theme> for JS-driven theme-aware components
+export const dataTheme = ref<string>(
+  (typeof document !== "undefined" &&
+    document.documentElement.getAttribute("data-theme")) ||
+    "light"
+);
+
+if (typeof window !== "undefined") {
+  new MutationObserver(() => {
+    const next = document.documentElement.getAttribute("data-theme") || "light";
+    if (next !== dataTheme.value) dataTheme.value = next;
+  }).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ["data-theme"],
+  });
+}
+
+export function buildPercentageChange(
+  value: number | null,
+  negativeIsBetter: boolean = true
+) {
+  // No change (or no comparison): stay neutral — never green/red, no up/down arrow.
+  if (value === null || value === undefined || value === 0) {
+    return { icon: "", value: "0", color: "text-ink-gray-5" };
+  }
+  const isPositive = value > 0;
+  const isGood = negativeIsBetter ? !isPositive : isPositive;
+  // Cap the magnitude at 100% so large swings (e.g. +3186%) stay readable.
+  const capped = Math.min(Math.abs(value), 100);
+  return {
+    icon: isPositive ? "lucide-arrow-up-right" : "lucide-arrow-down-left",
+    value: isPositive ? `+${capped}` : `-${capped}`,
+    color: isGood ? "text-ink-green-6" : "text-ink-red-6",
+  };
+}
+
+export function hasPermission() {
+  const authStore = useAuthStore();
+  return authStore.isAdmin || authStore.isManager;
+}
+
+/**
+ * Splits a legacy `placement` string ("bottom-start") into frappe-ui v1's
+ * `side` + `align` pair. A bare side means centred alignment.
+ */
+export function splitPlacement(placement?: string) {
+  const [side = "bottom", align = "center"] = (placement || "").split("-");
+  return { side, align } as { side: any; align: any };
+}

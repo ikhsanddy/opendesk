@@ -1,0 +1,18 @@
+include MANIFEST.in
+include requirements.txt
+include *.json
+include *.md
+include *.py
+include *.txt
+recursive-include opendesk *.css
+recursive-include opendesk *.csv
+recursive-include opendesk *.html
+recursive-include opendesk *.ico
+recursive-include opendesk *.js
+recursive-include opendesk *.json
+recursive-include opendesk *.md
+recursive-include opendesk *.png
+recursive-include opendesk *.py
+recursive-include opendesk *.svg
+recursive-include opendesk *.txt
+recursive-exclude opendesk *.pyc

@@ -1,0 +1,417 @@
+<template>
+  <div>
+    <LayoutHeader>
+      <template #left-header>
+        <ViewBreadcrumbs
+          :label="__('Tickets')"
+          route-name="TicketsAgent"
+          :options="dropdownOptions"
+          :dropdown-actions="(view) => viewActions(view, viewDialogConfig)"
+          :current-view="currentView"
+        />
+      </template>
+      <template #right-header>
+        <RouterLink class="inline-flex" :to="{ name: 'TicketAgentNew' }">
+          <Button
+            class="rtl:flex-row-reverse"
+            :label="__('Create')"
+            theme="gray"
+            variant="solid"
+          >
+            <template #prefix>
+              <LucidePlus class="h-4 w-4" />
+            </template>
+          </Button>
+        </RouterLink>
+      </template>
+    </LayoutHeader>
+    <ListViewBuilder
+      ref="listViewRef"
+      :options="options"
+      @row-click="
+        (row) =>
+          $router.push({
+            name: 'TicketAgent',
+            params: { ticketId: row },
+          })
+      "
+    />
+    <ExportModal
+      v-model="showExportModal"
+      :rowCount="$refs.listViewRef?.list?.data?.total_count ?? 0"
+      @update="
+        ({ export_type, export_all }) => exportRows(export_type, export_all)
+      "
+    />
+    <ViewModal
+      v-if="viewDialogConfig.show"
+      v-model="viewDialogConfig"
+      @update="onViewModalUpdate"
+    />
+    <BulkReplyModal
+      v-model="showBulkReplyModal"
+      :selections="listSelections"
+      @success="listViewRef?.unselectAll()"
+    />
+    <BulkEditModal
+      v-model="showBulkEditModal"
+      :selections="listSelections"
+      @success="reset(true)"
+    />
+    <BulkAssignModal
+      v-model="showBulkAssignModal"
+      :selections="listSelections"
+      @success="reset(true)"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { LayoutHeader, ListViewBuilder } from "@/components";
+import { TicketIcon } from "@/components/icons";
+import IndicatorIcon from "@/components/icons/IndicatorIcon.vue";
+import TicketPriority from "@/components/TicketPriority.vue";
+import BulkAssignModal from "@/components/ticket-agent/BulkAssignModal.vue";
+import BulkEditModal from "@/components/ticket-agent/BulkEditModal.vue";
+import BulkReplyModal from "@/components/ticket-agent/BulkReplyModal.vue";
+import ExportModal from "@opendesk/shared/ExportModal.vue";
+import ViewBreadcrumbs from "@/components/ViewBreadcrumbs.vue";
+import { normalizeFilters } from "@opendesk/shared/filter";
+import ViewModal from "@/components/ViewModal.vue";
+import { currentView, useView } from "@/composables/useView";
+import { useAuthStore } from "@/stores/auth";
+import { globalStore } from "@/stores/globalStore";
+import { useTicketStatusStore } from "@/stores/ticketStatus";
+import { __ } from "@/translation";
+import { View } from "@/types";
+import { resolutionBadge, responseBadge } from "@opendesk/shared/ticketCells";
+import { Badge, usePageMeta } from "frappe-ui";
+import { computed, h, onMounted, onUnmounted, reactive, ref } from "vue";
+import { useRoute, useRouter } from "vue-router";
+
+const router = useRouter();
+const route = useRoute();
+
+const {
+  getCurrentUserViews,
+  publicViews,
+  pinnedViews,
+  findView,
+  standardViews,
+  viewActions,
+  handleView,
+  resetViewDialog,
+} = useView("OD Ticket");
+
+const activeView = computed(() => findView(route.query.view as string).value);
+const hasActiveFilters = computed(
+  () => Object.keys(listViewRef.value?.list?.params?.filters || {}).length > 0
+);
+
+const { $socket } = globalStore();
+const { isManager, userId } = useAuthStore();
+
+const listViewRef = ref(null);
+const showExportModal = ref(false);
+
+const { getStatus } = useTicketStatusStore();
+
+const listSelections = ref(new Set());
+
+const showBulkReplyModal = ref(false);
+const showBulkEditModal = ref(false);
+const showBulkAssignModal = ref(false);
+
+const selectBannerActions = [
+  {
+    label: __("Reply"),
+    icon: "lucide-corner-up-left",
+    inline: true,
+    onClick: (selections: Set<string>) => {
+      listSelections.value = new Set(selections);
+      showBulkReplyModal.value = true;
+    },
+  },
+  {
+    label: __("Assign"),
+    icon: "lucide-user-plus",
+    inline: true,
+    onClick: (selections: Set<string>) => {
+      listSelections.value = new Set(selections);
+      showBulkAssignModal.value = true;
+    },
+  },
+  {
+    label: __("Export"),
+    icon: "lucide-download",
+    onClick: (selections: Set<string>) => {
+      listSelections.value = new Set(selections);
+      showExportModal.value = true;
+    },
+  },
+  {
+    label: __("Edit"),
+    icon: "lucide-pencil",
+    onClick: (selections: Set<string>) => {
+      listSelections.value = new Set(selections);
+      showBulkEditModal.value = true;
+    },
+  },
+];
+
+const options = computed(() => ({
+  doctype: "OD Ticket",
+  groupBy: true,
+  // two fields Opendesk never fills in, and the per-ticket feedback-link token
+  groupByExclude: ["avg_response_time", "user_resolution_time", "key"],
+  columnConfig: {
+    subject: {
+      custom: ({ row, item }) => {
+        const seenBy = row._seen ? JSON.parse(row._seen) : [];
+        const isSeen = seenBy.includes(userId || "");
+        return h(
+          "span",
+          {
+            class: ["truncate flex-1", !isSeen && "font-semibold"],
+          },
+          item
+        );
+      },
+    },
+    status: {
+      custom: ({ item }) => {
+        const status = getStatus(item);
+        const label = status?.["label_agent"];
+        return h(
+          "div",
+          { class: "flex items-center gap-1.5 justify-start w-full" },
+          [
+            h(IndicatorIcon, { class: status?.["parsed_color"] }),
+            h("span", { class: "truncate flex-1 text-base" }, label),
+          ]
+        );
+      },
+    },
+    priority: {
+      custom: ({ item }) => h(TicketPriority, { priority: item }),
+    },
+    agreement_status: {
+      custom: ({ item }) => {
+        if (!item) return null;
+        return h(Badge, {
+          label: __(item),
+          theme: slaStatusColorMap[item],
+          variant: "subtle",
+        });
+      },
+    },
+    response_by: {
+      custom: ({ row, item }) => responseBadge(row, item),
+    },
+    resolution_by: {
+      custom: ({ row, item }) =>
+        resolutionBadge(
+          row,
+          item,
+          getStatus(row.status)?.category === "Paused"
+        ),
+    },
+  },
+  selectable: true,
+  showSelectBanner: true,
+  selectBannerActions,
+  emptyState: {
+    title: __("No tickets found"),
+    icon: h(TicketIcon, {
+      class: "h-10 w-10",
+    }),
+    description:
+      activeView.value?.public || activeView.value?.pinned
+        ? __(
+            "No tickets found for this view. Try adjusting your filters or creating a new view."
+          )
+        : hasActiveFilters.value
+        ? __(
+            "No tickets found for the applied filters. Try adjusting or clearing your filters."
+          )
+        : undefined,
+  },
+  rowRoute: {
+    name: "TicketAgent",
+    prop: "ticketId",
+  },
+  hideColumnSetting: false,
+}));
+
+async function exportRows(
+  export_type: "CSV" | "Excel" = "Excel",
+  export_all: boolean = false
+) {
+  const list = listViewRef.value?.list;
+  if (!list) return;
+
+  const fields = JSON.stringify(list.data.columns.map((f) => f.key));
+  const order_by = list.params.order_by;
+
+  // Resolve `@me` filters to the current session user before export
+  const resolveAtMe = (entry: any) => {
+    if (Array.isArray(entry)) return entry.map(resolveAtMe);
+    if (entry === "@me") return userId;
+    if (entry === "%@me%") return `%${userId}%`;
+    return entry;
+  };
+  const conditions = normalizeFilters(list.params.filters).map(
+    ([field, operator, value]) => [field, operator, resolveAtMe(value)]
+  );
+  let pageLength: number;
+
+  if (export_all) {
+    pageLength = list.data.total_count;
+  } else {
+    pageLength = listSelections.value.size;
+    conditions.push(["name", "in", Array.from(listSelections.value)]);
+  }
+  const filters = JSON.stringify(conditions);
+
+  window.location.href = `/api/method/frappe.desk.reportview.export_query?file_format_type=${export_type}&title=OD Ticket&doctype=OD Ticket&fields=${fields}&filters=${encodeURIComponent(
+    filters
+  )}&order_by=${order_by}&page_length=${pageLength}&start=0&view=Report&with_comment_count=1`;
+  reset();
+  showExportModal.value = false;
+}
+
+function reset(reload = false) {
+  listViewRef.value?.unselectAll();
+  listSelections.value?.clear();
+  if (reload) listViewRef.value.reload();
+}
+
+const slaStatusColorMap = {
+  Fulfilled: "gray",
+  Failed: "red",
+  "Resolution Due": "amber",
+  "First Response Due": "amber",
+  Paused: "blue",
+};
+
+let viewDialogConfig = reactive({
+  show: false,
+  view: {
+    label: "",
+    icon: "",
+    name: "",
+  },
+  mode: "create",
+});
+
+const dropdownOptions = computed(() => {
+  const items = [
+    {
+      group: __("Default Views"),
+      options: [
+        {
+          label: __("List View"),
+          icon: "lucide-text-align-justify",
+          onClick: () =>
+            router.push({
+              name: "TicketsAgent",
+            }),
+        },
+      ],
+    },
+  ];
+
+  // Saved Views
+  if (getCurrentUserViews.value?.length !== 0) {
+    items.push({
+      group: __("Saved Views"),
+      options: parseViews(getCurrentUserViews.value),
+    });
+  }
+  if (pinnedViews.value?.length !== 0) {
+    items.push({
+      group: __("Private Views"),
+      options: parseViews(pinnedViews.value),
+    });
+  }
+
+  const allPublicViews = [
+    ...(standardViews.value || []),
+    ...(publicViews.value || []),
+  ];
+
+  const uniquePublicViews = Array.from(
+    new Map(allPublicViews.map((v) => [v.name, v])).values()
+  );
+
+  items.push({
+    group: __("Public Views"),
+    options: parseViews(uniquePublicViews),
+  });
+
+  items.push({
+    group: __("Create View"),
+    hideLabel: true,
+    options: [
+      {
+        label: __("Create View"),
+        icon: "lucide-plus",
+        onClick: () => {
+          resetViewDialog(viewDialogConfig);
+          viewDialogConfig.show = true;
+        },
+      },
+    ],
+  });
+
+  return items;
+});
+
+function parseViews(views: View[]) {
+  return views?.map((view) => {
+    return {
+      ...view,
+      onClick: () => {
+        currentView.value = {
+          label: view.label,
+          icon: view.icon,
+        };
+        router.push({
+          name: view.route_name,
+          query: {
+            view: view.name,
+          },
+        });
+      },
+    };
+  });
+}
+
+function onViewModalUpdate(viewInfo: any, action: string) {
+  handleView(viewInfo, action, viewDialogConfig, () => listViewRef.value?.list);
+}
+
+onMounted(() => {
+  if (!route.query.view) {
+    currentView.value = {
+      label: __("List"),
+      icon: LucideAlignJustify,
+    };
+  }
+  $socket.on("opendesk:new-ticket", reloadList);
+});
+
+onUnmounted(() => {
+  $socket.off("opendesk:new-ticket", reloadList);
+});
+
+function reloadList() {
+  listViewRef.value?.reload();
+}
+
+usePageMeta(() => {
+  return {
+    title: __("Tickets"),
+  };
+});
+</script>
